@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================
-# AI-Powered CTF Coach - الإصدار المتكامل
-# يجمع بين التوجيه التفاعلي والتحليل الذكي
+# AI-Powered CTF Coach - الإصدار المتكامل مع Gemini
+# تم تعديله لاستخدام مفتاح API المقدم مباشرة
 # ==========================================
 
 import os
@@ -10,11 +10,14 @@ import json
 import datetime
 import subprocess
 import re
-import readline  # لتحسين إدخال الأوامر
+import readline
 from typing import Dict, List, Optional
 import google.generativeai as genai
 
 # ================= الإعدادات =================
+# مفتاح API المقدم من المستخدم (يرجى التأكد من صحته)
+API_KEY = "AlzaSyDXxBHLrd2MtPbS6NYertNqUsfjxfuWilg"  # إذا لم يعمل، جرب "AIzaSyDXxBHLrd2MtPbS6NYertNqUsfjxfuWilg"
+
 SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -39,30 +42,28 @@ class Colors:
 
 # ================= إدارة الجلسات =================
 class Session:
-    def __init__(self, target: str, platform: str, api_key: str = None):
+    def __init__(self, target: str, platform: str):
         self.target = target
         self.platform = platform
-        self.api_key = api_key
-        self.steps = []          # سجل الخطوات
-        self.findings = {}        # النتائج الرئيسية (مثل المنافذ، الخدمات)
+        self.steps = []
+        self.findings = {}
         self.shell_obtained = False
-        self.ai_enabled = api_key is not None
-        self.ai_model = None
-        if self.ai_enabled:
-            self._init_ai()
+        self.ai_enabled = self._init_ai()
     
     def _init_ai(self):
         try:
-            genai.configure(api_key=self.api_key)
+            genai.configure(api_key=API_KEY)
+            # استخدام نموذج 1.0 Pro للتوافقية الأوسع
             self.ai_model = genai.GenerativeModel(
-                model_name="gemini-1.5-pro",
+                model_name="gemini-1.0-pro",
                 generation_config=GENERATION_CONFIG,
                 safety_settings=SAFETY_SETTINGS
             )
             self.ai_chat = self.ai_model.start_chat(history=[])
+            return True
         except Exception as e:
             print(f"{Colors.FAIL}⚠️ فشل تشغيل الذكاء الاصطناعي: {e}{Colors.ENDC}")
-            self.ai_enabled = False
+            return False
     
     def add_step(self, step_name: str, data: any):
         self.steps.append({
@@ -105,9 +106,8 @@ def run_command(cmd: str) -> str:
         return f"خطأ في تنفيذ الأمر: {e}"
 
 def extract_services_from_nmap(nmap_output: str) -> List[str]:
-    """استخراج أسماء الخدمات من مخرجات nmap (تقريبي)"""
+    """استخراج أسماء الخدمات من مخرجات nmap"""
     services = set()
-    # البحث عن سطور مثل: 80/tcp open  http
     for line in nmap_output.splitlines():
         match = re.search(r'\d+/(tcp|udp)\s+open\s+(\S+)', line)
         if match:
@@ -115,7 +115,7 @@ def extract_services_from_nmap(nmap_output: str) -> List[str]:
     return list(services)
 
 def search_exploit(service_version: str) -> str:
-    """البحث عن استغلال باستخدام searchsploit (إذا كان مثبتاً)"""
+    """البحث عن استغلال باستخدام searchsploit"""
     try:
         result = subprocess.run(f"searchsploit {service_version}", shell=True, capture_output=True, text=True)
         return result.stdout
@@ -143,11 +143,37 @@ class Methodology:
     def __init__(self, session: Session):
         self.session = session
     
+    def get_ai_advice(self, context: str, data: str) -> str:
+        """إرسال البيانات إلى الذكاء الاصطناعي للحصول على نصائح استراتيجية بأوامر محددة"""
+        if not self.session.ai_enabled:
+            return "الذكاء الاصطناعي غير مفعّل."
+        
+        prompt = f"""
+[الدور: خبير اختراق أخلاقي ومحلل تقني]
+[الهدف: {self.session.target}]
+[السياق: {context}]
+
+البيانات المدخلة:
+{data}
+
+المطلوب:
+1. تحليل دقيق للنتائج مع ذكر نقاط الضعف المحتملة.
+2. اقتراح خطوات تالية محددة جداً على شكل أوامر جاهزة للتنفيذ.
+3. إذا كان هناك ثغرة محتملة، اكتب الأمر المناسب لاستغلالها (مثل hydra، searchsploit، curl، إلخ).
+4. ركز على إعطاء أوامر عملية يمكن نسخها ولصقها مباشرة.
+
+الرجاء الرد بتنسيق منظم مع عناوين واضحة، وضمن المخرجات الأوامر بصيغة ```bash ... ```.
+"""
+        try:
+            response = self.session.ai_chat.send_message(prompt)
+            return response.text
+        except Exception as e:
+            return f"حدث خطأ في الاتصال بالذكاء الاصطناعي: {e}"
+    
     def step_recon(self):
         """المرحلة 1: الاستطلاع - Nmap"""
         print(f"\n{Colors.HEADER}{Colors.BOLD}🔍 المرحلة 1: الاستطلاع (Nmap){Colors.ENDC}")
         
-        # خيار تنفيذ nmap تلقائياً أو إدخال النتائج يدوياً
         if ask_yes_no("هل تريد تشغيل Nmap تلقائياً؟ (يحتاج صلاحيات)"):
             cmd = f"nmap -sC -sV {self.session.target}"
             print(f"{Colors.GREEN}تنفيذ: {cmd}{Colors.ENDC}")
@@ -163,66 +189,33 @@ class Methodology:
                 lines.append(line)
             output = "\n".join(lines)
         
-        # تحليل النتائج
         services = extract_services_from_nmap(output)
         self.session.findings['services'] = services
         self.session.findings['nmap_raw'] = output
         
         print(f"{Colors.GREEN}✅ الخدمات المكتشفة: {', '.join(services) if services else 'لا شيء'}{Colors.ENDC}")
         
-        # استشارة الذكاء الاصطناعي إذا كان مفعلاً
         if self.session.ai_enabled:
             advice = self.get_ai_advice("تحليل nmap", output)
             print(f"\n{Colors.WARNING}🧠 توصيات الذكاء الاصطناعي:{Colors.ENDC}\n{advice}")
         
         self.session.add_step("nmap", output)
         
-        # إذا كانت هناك خدمات ويب، انتقل مباشرة إلى خطوة ويب
         if 'http' in services or 'https' in services:
             self.step_web()
         else:
             self.step_other_services()
     
-    def get_ai_advice(self, context: str, data: str) -> str:
-        """إرسال البيانات إلى الذكاء الاصطناعي للحصول على نصائح استراتيجية"""
-        if not self.session.ai_enabled:
-            return "الذكاء الاصطناعي غير مفعّل."
-        
-        prompt = f"""
-[الدور: قائد فريق الاختراق الأحمر]
-[الهدف: {self.session.target}]
-[السياق: {context}]
-
-البيانات المدخلة:
-{data}
-
-المطلوب:
-1. تحليل فني دقيق للنتائج.
-2. تحديد نقاط الضعف المحتملة (CVEs، تكوينات خاطئة).
-3. اقتراح الخطوات التالية بأوامر محددة.
-4. تنبيهات أمنية إن لزم الأمر.
-
-الرجاء الرد بتنسيق منظم مع عناوين واضحة.
-"""
-        try:
-            response = self.session.ai_chat.send_message(prompt)
-            return response.text
-        except Exception as e:
-            return f"حدث خطأ في الاتصال بالذكاء الاصطناعي: {e}"
-    
     def step_web(self):
-        """المرحلة 2: تحليل خدمات الويب"""
+        """المرحلة 2: تحليل الويب"""
         print(f"\n{Colors.HEADER}{Colors.BOLD}🌐 المرحلة 2: تحليل الويب{Colors.ENDC}")
         
-        # فتح المتصفح (اختياري)
         if ask_yes_no("هل تريد فتح المتصفح على الهدف؟"):
             os.system(f"xdg-open http://{self.session.target} 2>/dev/null || open http://{self.session.target}")
         
-        # جمع الملاحظات
         print(f"{Colors.BLUE}📝 صف ما رأيت في الموقع (أو اكتب 'none'):{Colors.ENDC}")
         observations = input("> ").strip()
         
-        # خطوة تعداد الدلائل
         if ask_yes_no("هل تريد تشغيل Gobuster لاكتشاف الدلائل؟"):
             wordlist = input("👣 مسار قائمة الكلمات (افتراضي: /usr/share/wordlists/dirb/common.txt): ").strip()
             if not wordlist:
@@ -231,18 +224,13 @@ class Methodology:
             print(f"{Colors.GREEN}تنفيذ: {cmd}{Colors.ENDC}")
             output = run_command(cmd)
             print(output)
-            
-            # استخراج الدلائل
             dirs = re.findall(r'/(\w+)/?\s+\(Status: 200\)', output)
             if dirs:
                 print(f"{Colors.GREEN}✅ الدلائل المكتشفة: {', '.join(dirs)}{Colors.ENDC}")
                 self.session.findings['web_dirs'] = dirs
-            else:
-                print(f"{Colors.WARNING}⚠️ لم يتم العثور على دلائل.{Colors.ENDC}")
         else:
             output = None
         
-        # تحليل الذكاء الاصطناعي
         if self.session.ai_enabled:
             data_to_send = f"ملاحظات: {observations}\n"
             if output:
@@ -252,7 +240,6 @@ class Methodology:
         
         self.session.add_step("web_analysis", {"observations": observations, "gobuster": output})
         
-        # التوجيه بناءً على وجود رفع ملفات أو تسجيل دخول
         if 'upload' in observations or (output and 'upload' in output):
             self.step_upload()
         elif 'login' in observations or (self.session.findings.get('web_dirs') and 'admin' in self.session.findings['web_dirs']):
@@ -285,11 +272,10 @@ class Methodology:
                 if self.session.ai_enabled:
                     advice = self.get_ai_advice("رفع الملفات", result)
                     print(advice)
-        self.step_web_general()  # العودة للخطوات العامة
+        self.step_web_general()
     
     def step_login(self):
         print(f"\n{Colors.HEADER}{Colors.BOLD}🔐 مرحلة تحليل تسجيل الدخول{Colors.ENDC}")
-        # اقتراح هجمات
         print("💡 أفكار للاختبار:")
         print("  - SQL Injection: admin' OR '1'='1")
         print("  - اسم مستخدم شائع: admin/admin, root/root")
@@ -300,17 +286,14 @@ class Methodology:
         if self.session.ai_enabled:
             advice = self.get_ai_advice("صفحة تسجيل دخول", "قدم نصائح مخصصة لهذه الحالة")
             print(advice)
-        # بعد تجربة، نسأل إذا تم الاختراق
         if ask_yes_no("هل تمكنت من الدخول؟"):
             print("🎉 ممتاز! ابحث عن وظائف حساسة بعد الدخول.")
-            # ننتقل لمرحلة ما بعد الدخول
             self.step_post_auth()
         else:
             print("🔍 استمر في التحليل، راجع الكود المصدري وملفات JavaScript.")
     
     def step_post_auth(self):
         print(f"\n{Colors.HEADER}{Colors.BOLD}🔑 بعد المصادقة{Colors.ENDC}")
-        # توجيه لاستكشاف الميزات
         print("👀 ابحث عن:")
         print("  - رفع ملفات")
         print("  - تنفيذ أوامر")
@@ -351,7 +334,6 @@ class Methodology:
             print("📂 SMB متاح:")
             print("  - استخدم enum4linux أو smbclient")
         
-        # بحث searchsploit
         if ask_yes_no("هل تريد البحث عن استغلالات للخدمات المكتشفة؟"):
             for svc in services:
                 print(f"\n🔎 بحث عن {svc}:")
@@ -366,13 +348,11 @@ class Methodology:
         """مرحلة رفع الصلاحيات"""
         print(f"\n{Colors.HEADER}{Colors.BOLD}⬆️ مرحلة رفع الصلاحيات{Colors.ENDC}")
         
-        # إذا لم نحصل على شيل بعد، نسأل
         if not self.session.shell_obtained:
             if not ask_yes_no("هل لديك شيل على الجهاز؟"):
                 print("⚠️ عد لمرحلة الاستغلال أولاً.")
                 return
         
-        # جمع معلومات عن النظام
         print("📋 أوامر مفيدة لجمع المعلومات:")
         commands = [
             "whoami",
@@ -390,12 +370,9 @@ class Methodology:
         for cmd in commands:
             print(f"  - {cmd}")
         
-        # تشغيل بعضها تلقائياً؟
         if ask_yes_no("هل تريد تنفيذ بعض هذه الأوامر على الجهاز الهدف؟ (إذا كان لديك وصول)"):
-            # يمكن تنفيذها عبر ssh أو netcat، لكن هنا سنفترض أن المستخدم سينسخ النتائج
             pass
         
-        # إدخال النتائج
         print(f"{Colors.BLUE}الرجاء لصق نتائج الأوامر التي نفذتها (ثم Enter مرتين):{Colors.ENDC}")
         lines = []
         while True:
@@ -405,12 +382,10 @@ class Methodology:
             lines.append(line)
         output = "\n".join(lines)
         
-        # تحليل النتائج
         if self.session.ai_enabled:
             advice = self.get_ai_advice("رفع الصلاحيات", output)
             print(f"\n{Colors.WARNING}🧠 توصيات الذكاء الاصطناعي:{Colors.ENDC}\n{advice}")
         
-        # البحث عن suid أو sudo
         if 'sudo' in output:
             print("👀 تحقق من برامج sudo: GTFOBins")
         if '4000' in output:
@@ -418,11 +393,19 @@ class Methodology:
         
         self.session.add_step("privesc_enum", output)
     
+    def step_exploit_search(self):
+        """البحث عن استغلالات باستخدام searchsploit"""
+        query = input("🔎 أدخل اسم الخدمة أو الإصدار للبحث: ").strip()
+        if query:
+            result = search_exploit(query)
+            print(result)
+        else:
+            print("لم يتم إدخال أي شيء.")
+    
     def run(self):
         """تشغيل المنهجية خطوة بخطوة"""
         self.step_recon()
-        # بعد الانتهاء من الاستطلاع، قد نكون انتقلنا تلقائياً إلى خطوات أخرى
-        # لكن إذا لم يحصل المستخدم على شيل بعد، نسأل إذا أراد متابعة استكشاف خدمات أخرى
+        
         while not self.session.shell_obtained:
             print(f"\n{Colors.BOLD}🧭 القائمة الرئيسية:{Colors.ENDC}")
             print("  1. العودة لتحليل الويب")
@@ -441,37 +424,21 @@ class Methodology:
             else:
                 print("اختيار غير صالح.")
         
-        # بعد الحصول على شيل، ننتقل لرفع الصلاحيات
         if self.session.shell_obtained:
             self.step_privesc()
         
         print(f"\n{Colors.GREEN}{Colors.BOLD}✅ انتهت الجلسة. شكراً لاستخدامك CTF Coach!{Colors.ENDC}")
-    
-    def step_exploit_search(self):
-        """البحث عن استغلالات باستخدام searchsploit"""
-        query = input("🔎 أدخل اسم الخدمة أو الإصدار للبحث: ").strip()
-        if query:
-            result = search_exploit(query)
-            print(result)
-        else:
-            print("لم يتم إدخال أي شيء.")
 
 # ================= الواجهة الرئيسية =================
 def main():
     os.system('clear' if os.name == 'posix' else 'cls')
     print(f"{Colors.HEADER}{Colors.BOLD}")
     print("╔════════════════════════════════════════════════════════════╗")
-    print("║     🧠 AI-Powered CTF Coach - الإصدار المتكامل v2.0       ║")
+    print("║     🧠 AI-Powered CTF Coach - الإصدار المتكامل v2.1       ║")
     print("║     مشروع تخرج - دليل تفاعلي مع تحليل ذكي                 ║")
     print("╚════════════════════════════════════════════════════════════╝")
     print(Colors.ENDC)
     
-    # إعدادات API
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    if not api_key:
-        api_key = input("🔑 أدخل مفتاح Gemini API (أو اتركه فارغاً لتعطيل الذكاء الاصطناعي): ").strip()
-    
-    # قائمة الخيارات
     print("\n1. بدء جلسة جديدة")
     print("2. استئناف جلسة محفوظة")
     print("3. خروج")
@@ -480,23 +447,19 @@ def main():
     if choice == '1':
         target = input("📍 IP الهدف أو URL: ").strip()
         platform = input("🌐 المنصة (HTB/THM/غيرها): ").strip()
-        session = Session(target, platform, api_key if api_key else None)
+        session = Session(target, platform)
         meth = Methodology(session)
         meth.run()
-        # حفظ الجلسة بعد الانتهاء
         if ask_yes_no("هل تريد حفظ الجلسة؟"):
             session.save()
     elif choice == '2':
         filename = input("📁 اسم ملف الجلسة: ").strip()
         try:
             session = Session.load(filename)
-            # استعادة حالة الذكاء الاصطناعي
-            session.api_key = api_key if api_key else None
-            if session.api_key:
-                session._init_ai()
+            # إعادة تفعيل الذكاء الاصطناعي بعد التحميل
+            session.ai_enabled = session._init_ai()
             print(f"{Colors.GREEN}✅ تم تحميل الجلسة: {session.target} - {session.platform}{Colors.ENDC}")
             meth = Methodology(session)
-            # يمكن إضافة خيار للاستمرار من حيث توقفنا
             meth.run()
         except Exception as e:
             print(f"{Colors.FAIL}خطأ في تحميل الجلسة: {e}{Colors.ENDC}")
